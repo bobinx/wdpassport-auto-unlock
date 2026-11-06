@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import configparser
 import ctypes
+import getpass
 import hashlib
 import json
 import os
@@ -344,12 +345,73 @@ def unlock_drive(transport: ScsiTransport, password: str) -> dict[str, Any]:
 
 # --- Device Discovery & System Actions ---
 
-def find_passport_devices() -> list[dict[str, str]]:
-    """Discover connected Western Digital My Passport block devices in sysfs."""
-    devices: list[dict[str, str]] = []
+def format_bytes(size_bytes: int) -> str:
+    """Format byte count into human-readable unit."""
+    val = float(size_bytes)
+    for unit in ("B", "KB", "MB", "GB", "TB", "PB"):
+        if abs(val) < 1024.0 or unit == "PB":
+            return f"{val:.1f} {unit}" if unit in ("GB", "TB", "PB") else f"{int(val)} {unit}"
+        val /= 1024.0
+    return f"{size_bytes} B"
+
+
+def get_partition_uuid(partition_node: str) -> Optional[str]:
+    """Resolve filesystem UUID for a partition from /dev/disk/by-uuid."""
+    by_uuid = "/dev/disk/by-uuid"
+    if os.path.isdir(by_uuid):
+        try:
+            target_real = os.path.realpath(partition_node)
+            for entry in os.listdir(by_uuid):
+                entry_path = os.path.join(by_uuid, entry)
+                if os.path.realpath(entry_path) == target_real:
+                    return entry
+        except OSError:
+            pass
+    return None
+
+
+def get_block_device_partitions(dev_name: str) -> list[dict[str, Any]]:
+    """Scan visible partitions for a given block device."""
+    partitions: list[dict[str, Any]] = []
+    sys_dev = os.path.join("/sys/block", dev_name)
+    if not os.path.isdir(sys_dev):
+        return partitions
+
+    for entry in sorted(os.listdir(sys_dev)):
+        part_dir = os.path.join(sys_dev, entry)
+        if not os.path.isdir(part_dir):
+            continue
+        if os.path.isfile(os.path.join(part_dir, "partition")):
+            size_bytes = 0
+            size_file = os.path.join(part_dir, "size")
+            if os.path.isfile(size_file):
+                try:
+                    with open(size_file, "r") as f:
+                        size_bytes = int(f.read().strip()) * 512
+                except (ValueError, OSError):
+                    pass
+
+            node = f"/dev/{entry}"
+            uuid = get_partition_uuid(node)
+            partitions.append({
+                "name": entry,
+                "node": node,
+                "uuid": uuid,
+                "size_bytes": size_bytes,
+                "size_human": format_bytes(size_bytes) if size_bytes else "unknown",
+            })
+
+    return partitions
+
+
+def scan_all_disks() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Scan all disk block devices, categorizing into WD Passport and other disks."""
+    wd_devices: list[dict[str, Any]] = []
+    other_devices: list[dict[str, Any]] = []
+
     sys_block = "/sys/block"
     if not os.path.isdir(sys_block):
-        return devices
+        return wd_devices, other_devices
 
     for name in sorted(os.listdir(sys_block)):
         dev_dir = os.path.join(sys_block, name)
@@ -357,7 +419,7 @@ def find_passport_devices() -> list[dict[str, str]]:
         if not os.path.isdir(device_sub):
             continue
 
-        # Filter out optical / virtual unlocker devices (type 5 is CD-ROM)
+        # Skip virtual / optical devices
         type_file = os.path.join(device_sub, "type")
         if os.path.isfile(type_file):
             try:
@@ -372,6 +434,7 @@ def find_passport_devices() -> list[dict[str, str]]:
 
         vendor_file = os.path.join(device_sub, "vendor")
         model_file = os.path.join(device_sub, "model")
+        size_file = os.path.join(dev_dir, "size")
 
         vendor = ""
         model = ""
@@ -382,11 +445,18 @@ def find_passport_devices() -> list[dict[str, str]]:
             with open(model_file, "r", errors="ignore") as f:
                 model = f.read().strip()
 
+        size_bytes = 0
+        if os.path.isfile(size_file):
+            try:
+                with open(size_file, "r") as f:
+                    size_bytes = int(f.read().strip()) * 512
+            except (ValueError, OSError):
+                pass
+
         is_wd = "WD" in vendor.upper() or "WESTERN DIGITAL" in vendor.upper() or "WD" in model.upper()
         is_passport = "MY PASSPORT" in model.upper() or "PASSPORT" in model.upper() or "ELEMENTS" in model.upper()
 
         if not (is_wd and is_passport):
-            # Check /dev/disk/by-id symlinks
             by_id = "/dev/disk/by-id"
             if os.path.isdir(by_id):
                 for link in os.listdir(by_id):
@@ -401,15 +471,43 @@ def find_passport_devices() -> list[dict[str, str]]:
                         except OSError:
                             continue
 
-        if is_wd and is_passport:
-            devices.append({
-                "name": name,
-                "node": f"/dev/{name}",
-                "vendor": vendor,
-                "model": model,
-            })
+        partitions = get_block_device_partitions(name)
 
-    return devices
+        dev_info: dict[str, Any] = {
+            "name": name,
+            "node": f"/dev/{name}",
+            "vendor": vendor or "Unknown",
+            "model": model or "Unknown",
+            "size_bytes": size_bytes,
+            "size_human": format_bytes(size_bytes) if size_bytes else "unknown",
+            "partitions": partitions,
+            "is_wd": bool(is_wd and is_passport),
+        }
+
+        if is_wd and is_passport:
+            status_desc = "unknown"
+            cipher_desc = "unknown"
+            if os.path.exists(dev_info["node"]):
+                try:
+                    with LinuxSgioTransport(dev_info["node"]) as transport:
+                        status_info = get_encryption_status(transport)
+                        status_desc = status_info["status"]
+                        cipher_desc = status_info["cipher"]
+                except Exception:
+                    pass
+            dev_info["security_status"] = status_desc
+            dev_info["cipher"] = cipher_desc
+            wd_devices.append(dev_info)
+        else:
+            other_devices.append(dev_info)
+
+    return wd_devices, other_devices
+
+
+def find_passport_devices() -> list[dict[str, str]]:
+    """Discover connected Western Digital My Passport block devices in sysfs."""
+    wd_devices, _ = scan_all_disks()
+    return [{"name": d["name"], "node": d["node"], "vendor": d["vendor"], "model": d["model"]} for d in wd_devices]
 
 
 def rescan_kernel_device(device_node: str, timeout: int = 15) -> None:
@@ -575,7 +673,7 @@ def resolve_device(cli_device: Optional[str], config_device: Optional[str]) -> s
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="wd-auto-unlock",
-        description="Zero-dependency utility to unlock and mount WD Passport drives on Linux.",
+        description="Utility to unlock and mount WD Passport drives on Linux.",
     )
     parser.add_argument(
         "-V", "--version", action="version", version=f"%(prog)s {__version__}"
@@ -591,6 +689,27 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("-t", "--timeout", type=int, default=None, help="Device wait timeout in seconds (default: 30)")
 
     subparsers = parser.add_subparsers(dest="command", help="Command to run")
+
+    # Command: list
+    p_list = subparsers.add_parser("list", help="List connected WD Passport and disk block devices")
+    p_list.add_argument("-a", "--all", action="store_true", default=argparse.SUPPRESS, help="List all disk devices, not just WD")
+    p_list.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help="Output results in JSON")
+
+    # Command: auto (automated unattended unlock)
+    p_auto = subparsers.add_parser("auto", help="Automated unlock using /etc/wdpassport.conf (for systemd)")
+    p_auto.add_argument("-c", "--config", default=argparse.SUPPRESS, help="Path to config file")
+    p_auto.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help="Output results in JSON")
+
+    # Command: config / setup
+    p_config = subparsers.add_parser("config", aliases=["setup"], help="Configure auto-unlock in /etc/wdpassport.conf")
+    p_config.add_argument("-d", "--device", default=argparse.SUPPRESS, help="Target block device node")
+    p_config.add_argument("-p", "--password", default=argparse.SUPPRESS, help="Passphrase to save")
+    p_config.add_argument("-u", "--uuid", default=argparse.SUPPRESS, help="Partition UUID to mount")
+    p_config.add_argument("-m", "--mount-point", default=argparse.SUPPRESS, help="Mount point directory")
+    p_config.add_argument("-t", "--timeout", type=int, default=argparse.SUPPRESS, help="Timeout in seconds")
+    p_config.add_argument("-c", "--config", default=argparse.SUPPRESS, help="Config file path")
+    p_config.add_argument("--enable-service", action="store_true", default=argparse.SUPPRESS, help="Enable systemd timer and reload udev")
+    p_config.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help="Output results in JSON")
 
     # Command: unlock (primary action)
     p_unlock = subparsers.add_parser("unlock", help="Unlock drive and optionally mount partition")
@@ -615,6 +734,271 @@ def build_parser() -> argparse.ArgumentParser:
     p_unmount.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help="Output results in JSON")
 
     return parser
+
+
+def cmd_list(as_json: bool, show_all: bool) -> int:
+    """List connected Western Digital and block devices."""
+    wd_devices, other_devices = scan_all_disks()
+
+    if as_json:
+        data = {
+            "success": True,
+            "wd_devices": wd_devices,
+            "other_devices": other_devices,
+        }
+        print(json.dumps(data, indent=2))
+        return 0
+
+    if wd_devices:
+        print("Western Digital Passport Devices:")
+        for idx, dev in enumerate(wd_devices, 1):
+            status_str = dev.get("security_status", "unknown")
+            cipher_str = dev.get("cipher", "")
+            status_line = f"{status_str} ({cipher_str})" if cipher_str and cipher_str != "unknown" else status_str
+
+            print(f"  [{idx}] {dev['node']}  {dev['vendor']} {dev['model']}  ({dev['size_human']})")
+            print(f"      Status: {status_line}")
+            if dev["partitions"]:
+                print("      Partitions:")
+                for p in dev["partitions"]:
+                    uuid_str = f"UUID: {p['uuid']}" if p["uuid"] else "No UUID"
+                    print(f"        - {p['node']}  ({uuid_str}, {p['size_human']})")
+            else:
+                if status_str == "locked":
+                    print("      Partitions: none visible (drive is locked)")
+                else:
+                    print("      Partitions: none detected")
+        print()
+
+    if show_all or not wd_devices:
+        if other_devices:
+            header = "All Connected Disk Block Devices:" if show_all else "No Western Digital Passport devices found. Connected disks:"
+            print(header)
+            for dev in other_devices:
+                print(f"  - {dev['node']}  {dev['vendor']} {dev['model']}  ({dev['size_human']})")
+                if dev["partitions"]:
+                    for p in dev["partitions"]:
+                        uuid_str = f"UUID: {p['uuid']}" if p["uuid"] else "No UUID"
+                        print(f"      └─ {p['node']}  ({uuid_str}, {p['size_human']})")
+            print()
+            if not wd_devices:
+                print("If your drive is listed above, target it manually:")
+                print("  sudo wd-auto-unlock unlock --device /dev/sdX")
+        else:
+            print("No disk block devices found.")
+
+    return 0
+
+
+def cmd_auto(config_file: str, as_json: bool) -> int:
+    """Automated auto-unlock routine for systemd service or unattended boot."""
+    file_cfg = load_config(config_file)
+    password = file_cfg.get("password")
+    if not password:
+        err_msg = f"No password configured in {config_file}. Run 'sudo wd-auto-unlock config' first."
+        if as_json:
+            print(json.dumps({"success": False, "error": err_msg}), file=sys.stderr)
+        else:
+            print(f"Error: {err_msg}", file=sys.stderr)
+        return 2
+
+    cfg_device = file_cfg.get("device")
+    device_path = resolve_device(None, cfg_device)
+
+    uuid = file_cfg.get("uuid")
+    mount_point = file_cfg.get("mount_point")
+    try:
+        timeout = int(file_cfg.get("timeout", 30))
+    except ValueError:
+        timeout = 30
+
+    return cmd_unlock(
+        device_path=device_path,
+        password=password,
+        uuid=uuid,
+        mount_point=mount_point,
+        timeout=timeout,
+        as_json=as_json,
+    )
+
+
+def cmd_config(
+    device: Optional[str],
+    password: Optional[str],
+    uuid: Optional[str],
+    mount_point: Optional[str],
+    timeout: Optional[int],
+    config_file: str,
+    enable_service: bool,
+    as_json: bool,
+) -> int:
+    """Configure auto-unlock settings in /etc/wdpassport.conf."""
+    is_interactive = (password is None) and sys.stdin.isatty()
+
+    if is_interactive:
+        print("=== WD Passport Auto-Unlock Setup ===")
+        print()
+
+        # Step 1: Detect or select device
+        if not device:
+            wd_devices, other_devices = scan_all_disks()
+            if len(wd_devices) == 1:
+                dev = wd_devices[0]
+                resp = input(
+                    f"Found {dev['vendor']} {dev['model']} at {dev['node']} ({dev['size_human']}). Use this drive? [Y/n]: "
+                ).strip().lower()
+                if resp in ("", "y", "yes"):
+                    device = dev["node"]
+            elif len(wd_devices) > 1:
+                print("Multiple Western Digital drives found:")
+                for i, dev in enumerate(wd_devices, 1):
+                    print(f"  [{i}] {dev['node']}  {dev['vendor']} {dev['model']} ({dev['size_human']})")
+                sel = input(f"Select drive [1-{len(wd_devices)}]: ").strip()
+                try:
+                    idx = int(sel) - 1
+                    if 0 <= idx < len(wd_devices):
+                        device = wd_devices[idx]["node"]
+                except ValueError:
+                    pass
+
+            if not device:
+                print("No WD Passport auto-selected. Leave blank to auto-detect at runtime,")
+                custom = input("or enter device node (e.g. /dev/sdb): ").strip()
+                if custom:
+                    device = custom
+
+        # Step 2: Prompt for password
+        while not password:
+            pwd = getpass.getpass("Enter drive unlock password: ")
+            if not pwd:
+                print("Password cannot be empty. Please try again.")
+                continue
+            password = pwd
+
+        # Step 3: Test password if device is available
+        if device and os.path.exists(device):
+            print(f"Verifying password on {device}...")
+            try:
+                with LinuxSgioTransport(device) as transport:
+                    status = get_encryption_status(transport)
+                    if status["locked_code"] == 0x01:
+                        unlock_drive(transport, password)
+                        print("Password verified and drive unlocked successfully.")
+                        rescan_kernel_device(device)
+                    elif status["locked_code"] in (0x00, 0x02):
+                        print(f"Drive is currently {status['status']}.")
+            except AuthError as exc:
+                print(f"Error: Password verification failed: {exc}")
+                retry = input("Save configuration anyway? [y/N]: ").strip().lower()
+                if retry not in ("y", "yes"):
+                    print("Setup aborted.")
+                    return 1
+            except Exception as exc:
+                print(f"Notice: Could not test unlock on {device}: {exc}")
+
+        # Step 4: Scan for partitions to mount
+        if device and not uuid:
+            time.sleep(0.5)
+            dev_name = os.path.basename(device)
+            parts = get_block_device_partitions(dev_name)
+            if parts:
+                print()
+                print(f"Partitions found on {device}:")
+                for i, p in enumerate(parts, 1):
+                    uuid_str = f"UUID: {p['uuid']}" if p["uuid"] else "No UUID"
+                    print(f"  [{i}] {p['node']}  ({uuid_str}, {p['size_human']})")
+                print("  [0] Do not auto-mount (unlock only)")
+                sel = input("Select partition to mount [default: 1]: ").strip() or "1"
+                try:
+                    idx = int(sel) - 1
+                    if 0 <= idx < len(parts):
+                        uuid = parts[idx]["uuid"]
+                except ValueError:
+                    pass
+
+        if uuid and not mount_point:
+            mp_input = input("Enter mount point directory [default: /media/WD]: ").strip()
+            mount_point = mp_input or "/media/WD"
+
+        if timeout is None:
+            timeout = 30
+
+        # Step 5: Ask to enable service
+        enable_input = input("Enable automatic unlock on boot and USB hotplug? [Y/n]: ").strip().lower()
+        if enable_input in ("", "y", "yes"):
+            enable_service = True
+
+    # Validate
+    if not password:
+        err_msg = "Password is required for configuration. Provide via --password."
+        if as_json:
+            print(json.dumps({"success": False, "error": err_msg}), file=sys.stderr)
+        else:
+            print(f"Error: {err_msg}", file=sys.stderr)
+        return 2
+
+    # Save to config file
+    lines = [
+        "# /etc/wdpassport.conf",
+        "# Generated by wd-auto-unlock config",
+        "",
+        "[wdpassport]",
+        f"password = {password}",
+    ]
+    if uuid:
+        lines.append(f"uuid = {uuid}")
+    if mount_point:
+        lines.append(f"mount_point = {mount_point}")
+    if timeout:
+        lines.append(f"timeout = {timeout}")
+    if device:
+        lines.append(f"device = {device}")
+
+    content = "\n".join(lines) + "\n"
+
+    try:
+        conf_dir = os.path.dirname(config_file)
+        if conf_dir:
+            os.makedirs(conf_dir, exist_ok=True)
+        with open(config_file, "w") as f:
+            f.write(content)
+        os.chmod(config_file, 0o600)
+    except OSError as exc:
+        err_msg = f"Failed to write configuration file {config_file}: {exc}"
+        if as_json:
+            print(json.dumps({"success": False, "error": err_msg}), file=sys.stderr)
+        else:
+            print(f"Error: {err_msg}", file=sys.stderr)
+        return 1
+
+    services_enabled = False
+    if enable_service:
+        try:
+            subprocess.run(["systemctl", "enable", "--now", "wd-unlock.timer"], check=False)
+            subprocess.run(["udevadm", "control", "--reload-rules"], check=False)
+            services_enabled = True
+        except (FileNotFoundError, OSError):
+            pass
+
+    out_data = {
+        "success": True,
+        "config_file": config_file,
+        "device": device,
+        "uuid": uuid,
+        "mount_point": mount_point,
+        "timeout": timeout or 30,
+        "services_enabled": services_enabled,
+    }
+
+    if as_json:
+        print(json.dumps(out_data, indent=2))
+    else:
+        print(f"Saved configuration to {config_file} (mode 0600).")
+        if services_enabled:
+            print("Enabled wd-unlock.timer and reloaded udev rules.")
+        print("Setup complete.")
+
+    return 0
 
 
 def cmd_status(
@@ -674,6 +1058,13 @@ def cmd_unlock(
                 "cipher": current_status["cipher"],
             }
         else:
+            if not password and sys.stdin.isatty():
+                try:
+                    password = getpass.getpass(f"Password for {device_path}: ")
+                except (KeyboardInterrupt, EOFError):
+                    print("\nAborted.", file=sys.stderr)
+                    return 130
+
             if not password:
                 err_msg = "No password provided. Set via --password, WD_PASSWORD env var, or config file."
                 if as_json:
@@ -785,13 +1176,42 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
-    command = args.command or "unlock"
+    command = args.command
     config_file = getattr(args, "config", DEFAULT_CONFIG_PATH)
-    file_cfg = load_config(config_file)
-
     as_json = getattr(args, "json", False)
 
+    # If no command is provided, default to auto when unattended, or unlock when interactive
+    if not command:
+        command = "unlock" if sys.stdin.isatty() else "auto"
+
+    file_cfg = load_config(config_file)
+
     try:
+        if command == "list":
+            show_all = getattr(args, "all", False)
+            return cmd_list(as_json=as_json, show_all=show_all)
+
+        if command == "auto":
+            return cmd_auto(config_file=config_file, as_json=as_json)
+
+        if command in ("config", "setup"):
+            device = getattr(args, "device", None)
+            password = getattr(args, "password", None) or os.getenv("WD_PASSWORD")
+            uuid = getattr(args, "uuid", None) or os.getenv("WD_UUID")
+            mount_point = getattr(args, "mount_point", None) or os.getenv("WD_MOUNT_POINT")
+            timeout = getattr(args, "timeout", None)
+            enable_service = getattr(args, "enable_service", False)
+            return cmd_config(
+                device=device,
+                password=password,
+                uuid=uuid,
+                mount_point=mount_point,
+                timeout=timeout,
+                config_file=config_file,
+                enable_service=enable_service,
+                as_json=as_json,
+            )
+
         if command == "unmount":
             mount_point = (
                 getattr(args, "mount_point", None)
@@ -800,7 +1220,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             )
             return cmd_unmount(mount_point=mount_point, as_json=as_json)
 
-        # Device resolution
+        # Device resolution for status & unlock
         cli_device = getattr(args, "device", None)
         cfg_device = os.getenv("WD_DEVICE") or file_cfg.get("device")
         device_path = resolve_device(cli_device, cfg_device)

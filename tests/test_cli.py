@@ -2,14 +2,19 @@
 
 import io
 import json
+import os
 import unittest
 from unittest.mock import MagicMock, patch
 from tests.test_scsi import MockScsiTransport, make_hsb1_block, make_status_block
 from wd_auto_unlock import (
     build_parser,
+    cmd_auto,
+    cmd_config,
+    cmd_list,
     cmd_status,
     cmd_unlock,
     cmd_unmount,
+    format_bytes,
     main,
     mount_device,
     rescan_kernel_device,
@@ -74,7 +79,9 @@ class TestCli(unittest.TestCase):
         transport = MockScsiTransport()
         transport.status_responses.append(make_status_block(locked_code=0x01))
 
-        with patch("sys.stderr", new_callable=io.StringIO) as mock_stderr:
+        with patch("sys.stdin.isatty", return_value=False), patch(
+            "sys.stderr", new_callable=io.StringIO
+        ) as mock_stderr:
             ret = cmd_unlock(
                 device_path="/dev/sdb",
                 password=None,
@@ -229,6 +236,185 @@ class TestCli(unittest.TestCase):
             mock_run.return_value = mock_proc
             rescan_kernel_device("/dev/sdb")
             mock_run.assert_called()
+
+    def test_cmd_list_with_wd_devices_text(self):
+        sample_wd = [{
+            "name": "sdb",
+            "node": "/dev/sdb",
+            "path": "/dev/sdb",
+            "vendor": "Western Digital",
+            "model": "My Passport 25E1",
+            "size_bytes": 1000204886016,
+            "size_human": "931.5 GB",
+            "is_wd": True,
+            "partitions": [{
+                "name": "sdb1",
+                "node": "/dev/sdb1",
+                "uuid": "88E2-42DF",
+                "size_bytes": 1000204886016,
+                "size_human": "931.5 GB",
+            }],
+        }]
+        with patch("wd_auto_unlock.scan_all_disks", return_value=(sample_wd, [])), \
+             patch("sys.stdout", new_callable=io.StringIO) as mock_stdout:
+            ret = cmd_list(as_json=False, show_all=False)
+            output = mock_stdout.getvalue()
+
+        self.assertEqual(ret, 0)
+        self.assertIn("/dev/sdb", output)
+        self.assertIn("My Passport 25E1", output)
+        self.assertIn("88E2-42DF", output)
+
+    def test_cmd_list_no_wd_devices_text(self):
+        sample_other = [{
+            "name": "sda",
+            "node": "/dev/sda",
+            "path": "/dev/sda",
+            "vendor": "Samsung",
+            "model": "SSD 980",
+            "size_bytes": 500000000000,
+            "size_human": "465.7 GB",
+            "is_wd": False,
+            "partitions": [],
+        }]
+        with patch("wd_auto_unlock.scan_all_disks", return_value=([], sample_other)), \
+             patch("sys.stdout", new_callable=io.StringIO) as mock_stdout:
+            ret = cmd_list(as_json=False, show_all=False)
+            output = mock_stdout.getvalue()
+
+        self.assertEqual(ret, 0)
+        self.assertIn("No Western Digital Passport devices", output)
+        self.assertIn("wd-auto-unlock unlock --device /dev/sdX", output)
+
+    def test_cmd_list_json(self):
+        sample_wd = [{
+            "name": "sdb",
+            "node": "/dev/sdb",
+            "path": "/dev/sdb",
+            "vendor": "Western Digital",
+            "model": "My Passport",
+            "size_bytes": 1000000,
+            "size_human": "976 KB",
+            "is_wd": True,
+            "partitions": [],
+        }]
+        with patch("wd_auto_unlock.scan_all_disks", return_value=(sample_wd, [])), \
+             patch("sys.stdout", new_callable=io.StringIO) as mock_stdout:
+            ret = cmd_list(as_json=True, show_all=False)
+            output = mock_stdout.getvalue()
+
+        self.assertEqual(ret, 0)
+        data = json.loads(output)
+        self.assertTrue(data["success"])
+        self.assertEqual(len(data["wd_devices"]), 1)
+        self.assertEqual(data["wd_devices"][0]["node"], "/dev/sdb")
+
+    def test_cmd_auto_missing_config(self):
+        with patch("os.path.isfile", return_value=False), \
+             patch("sys.stderr", new_callable=io.StringIO) as mock_stderr:
+            ret = cmd_auto(config_file="/nonexistent.conf", as_json=False)
+            err = mock_stderr.getvalue()
+
+        self.assertEqual(ret, 2)
+        self.assertIn("Configuration file not found", err)
+
+    def test_cmd_auto_missing_password(self):
+        with patch("os.path.isfile", return_value=True), \
+             patch("wd_auto_unlock.load_config", return_value={}), \
+             patch("sys.stderr", new_callable=io.StringIO) as mock_stderr:
+            ret = cmd_auto(config_file="/dummy.conf", as_json=False)
+            err = mock_stderr.getvalue()
+
+        self.assertEqual(ret, 2)
+        self.assertIn("No password configured", err)
+
+    def test_cmd_auto_success(self):
+        cfg = {"password": "testpassword", "device": "/dev/sdb", "mount_point": "/mnt/wd"}
+        with patch("os.path.isfile", return_value=True), \
+             patch("wd_auto_unlock.load_config", return_value=cfg), \
+             patch("wd_auto_unlock.cmd_unlock", return_value=0) as mock_unlock:
+            ret = cmd_auto(config_file="/dummy.conf", as_json=False)
+
+        self.assertEqual(ret, 0)
+        mock_unlock.assert_called_once_with(
+            device_path="/dev/sdb",
+            password="testpassword",
+            uuid=None,
+            mount_point="/mnt/wd",
+            timeout=30,
+            as_json=False,
+        )
+
+    def test_cmd_config_non_interactive_success(self):
+        import tempfile
+        with tempfile.NamedTemporaryFile(delete=True) as tmp:
+            tmp_conf = tmp.name
+
+        try:
+            with patch("sys.stdin.isatty", return_value=False):
+                ret = cmd_config(
+                    device="/dev/sdb",
+                    password="mypassword",
+                    uuid="1234-5678",
+                    mount_point="/mnt/passport",
+                    timeout=45,
+                    config_file=tmp_conf,
+                    enable_service=False,
+                    as_json=True,
+                )
+            self.assertEqual(ret, 0)
+            self.assertTrue(os.path.isfile(tmp_conf))
+            mode = oct(os.stat(tmp_conf).st_mode & 0o777)
+            self.assertEqual(mode, oct(0o600))
+
+            with open(tmp_conf, "r") as f:
+                content = f.read()
+            self.assertIn("password = mypassword", content)
+            self.assertIn("device = /dev/sdb", content)
+            self.assertIn("uuid = 1234-5678", content)
+            self.assertIn("mount_point = /mnt/passport", content)
+            self.assertIn("timeout = 45", content)
+        finally:
+            if os.path.exists(tmp_conf):
+                os.remove(tmp_conf)
+
+    def test_cmd_config_missing_password_non_interactive(self):
+        with patch("sys.stdin.isatty", return_value=False), \
+             patch("sys.stderr", new_callable=io.StringIO) as mock_stderr:
+            ret = cmd_config(
+                device="/dev/sdb",
+                password=None,
+                uuid=None,
+                mount_point=None,
+                timeout=None,
+                config_file="/tmp/dummy.conf",
+                enable_service=False,
+                as_json=False,
+            )
+            err = mock_stderr.getvalue()
+
+        self.assertEqual(ret, 2)
+        self.assertIn("Password is required for configuration", err)
+
+    def test_main_subcommand_dispatch(self):
+        with patch("wd_auto_unlock.cmd_list", return_value=0) as mock_list:
+            self.assertEqual(main(["list"]), 0)
+            mock_list.assert_called_once()
+
+        with patch("wd_auto_unlock.cmd_auto", return_value=0) as mock_auto:
+            self.assertEqual(main(["auto"]), 0)
+            mock_auto.assert_called_once()
+
+        with patch("wd_auto_unlock.cmd_config", return_value=0) as mock_config:
+            self.assertEqual(main(["config", "-p", "secret"]), 0)
+            mock_config.assert_called_once()
+
+    def test_format_bytes(self):
+        self.assertEqual(format_bytes(500), "500 B")
+        self.assertEqual(format_bytes(1024), "1 KB")
+        self.assertEqual(format_bytes(1048576), "1 MB")
+        self.assertEqual(format_bytes(1073741824), "1.0 GB")
+        self.assertEqual(format_bytes(1099511627776), "1.0 TB")
 
 
 if __name__ == "__main__":

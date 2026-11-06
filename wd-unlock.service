@@ -5,7 +5,7 @@ After=local-fs.target
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/bin/wd-auto-unlock unlock
+ExecStart=/usr/local/bin/wd-auto-unlock auto
 RemainAfterExit=no
 StandardOutput=journal
 StandardError=journal
