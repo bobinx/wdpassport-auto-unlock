@@ -180,7 +180,7 @@ Western Digital My Passport drives contain a hardware AES engine in their USB-SA
 
 `wd-auto-unlock` communicates directly with the bridge chip via Linux `SG_IO` ioctl SCSI commands (`0xC0`, `0xD8`, `0xC1`), performs the SHA-256 key derivation, unlocks the drive, triggers a kernel partition table rescan, and mounts your filesystem.
 
-For an in-depth breakdown of the SCSI opcodes, HSB1 checksum formula, key derivation function, and distribution analysis (standalone binary vs. Python library), see [HOW_IT_WORKS.md](HOW_IT_WORKS.md).
+For an in-depth breakdown of the SCSI opcodes, HSB1 checksum formula, and key derivation function, see [HOW_IT_WORKS.md](HOW_IT_WORKS.md).
 
 ---
 
