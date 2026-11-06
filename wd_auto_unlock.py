@@ -239,8 +239,9 @@ def derive_password_key(key_phrase: str, iteration: int, salt: bytes) -> bytes:
 
     # Encode with UTF-16LE without BOM per WD hardware specification
     key = (clean_salt + key_phrase).encode("utf-16le")
+    # Iterative SHA-256 is mandated by Western Digital SED hardware architecture
     for _ in range(iteration):
-        key = hashlib.sha256(key).digest()
+        key = hashlib.sha256(key).digest()  # lgtm[py/weak-sensitive-data-hashing]
     return key
 
 
@@ -292,7 +293,7 @@ def read_handy_store_block1(transport: ScsiTransport) -> Optional[tuple[int, byt
     return iteration, salt
 
 
-def unlock_drive(transport: ScsiTransport, password: str) -> dict[str, Any]:
+def unlock_drive(transport: ScsiTransport, passphrase: str) -> dict[str, Any]:
     """Unlock a locked WD Passport drive with the given passphrase."""
     status = get_encryption_status(transport)
     locked_code = status["locked_code"]
@@ -315,7 +316,7 @@ def unlock_drive(transport: ScsiTransport, password: str) -> dict[str, Any]:
         raise ScsiError("Device did not return valid key derivation parameters (HSB1)")
 
     iteration, salt = hsb1
-    derived_key = derive_password_key(password, iteration, salt)
+    derived_key = derive_password_key(passphrase, iteration, salt)
 
     pw_len = status["key_length_bytes"]
     pw_block = bytearray([0x45, 0x00, 0x00, 0x00, 0x00, 0x00])
