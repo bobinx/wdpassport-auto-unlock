@@ -3,20 +3,27 @@ BINDIR ?= $(PREFIX)/bin
 SYSCONFDIR ?= /etc
 SYSTEMD_SYSTEM_DIR ?= /etc/systemd/system
 UDEV_RULES_DIR ?= /etc/udev/rules.d
-PYTHON ?= python3
+GO ?= go
+CGO_ENABLED ?= 0
+LDFLAGS ?= -s -w
 
-.PHONY: all lint install uninstall clean
+.PHONY: all build deb test install uninstall clean
 
-all:
-	@echo "wd-auto-unlock is a zero-dependency Python utility."
-	@echo "Run 'make lint' to check syntax, or 'sudo make install' to install."
+all: build
 
-lint:
-	$(PYTHON) -m py_compile wd_auto_unlock.py
+build:
+	CGO_ENABLED=$(CGO_ENABLED) $(GO) build -ldflags="$(LDFLAGS)" -o wd-auto-unlock ./cmd/wd-auto-unlock
 
-install:
+deb:
+	$(GO) run ./cmd/build-deb amd64
+	$(GO) run ./cmd/build-deb arm64
+
+test:
+	$(GO) test -v ./...
+
+install: build
 	install -d $(DESTDIR)$(BINDIR)
-	install -m 0755 wd_auto_unlock.py $(DESTDIR)$(BINDIR)/wd-auto-unlock
+	install -m 0755 wd-auto-unlock $(DESTDIR)$(BINDIR)/wd-auto-unlock
 	install -d $(DESTDIR)$(SYSTEMD_SYSTEM_DIR)
 	sed 's|/usr/local/bin|$(BINDIR)|g' wd-unlock.service > $(DESTDIR)$(SYSTEMD_SYSTEM_DIR)/wd-unlock.service
 	chmod 0644 $(DESTDIR)$(SYSTEMD_SYSTEM_DIR)/wd-unlock.service
@@ -39,6 +46,5 @@ uninstall:
 	@echo "Note: $(DESTDIR)$(SYSCONFDIR)/wdpassport.conf was preserved."
 
 clean:
-	find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
-	find . -name "*.py[cod]" -delete 2>/dev/null || true
-	rm -rf .coverage .pytest_cache .mypy_cache
+	rm -f wd-auto-unlock
+	rm -rf dist

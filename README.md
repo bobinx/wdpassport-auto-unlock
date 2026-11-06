@@ -8,7 +8,40 @@ Automatically unlock and mount Western Digital My Passport drives on Linux.
 
 ### 1. Install
 
-Clone the repository and install the command, systemd service, and udev rule:
+Choose your preferred installation method:
+
+#### Option A: Debian / Ubuntu / Raspberry Pi OS (`apt`)
+
+Download and install the Debian package (available for `amd64` and `arm64`):
+
+```bash
+# For x86_64 / amd64:
+curl -LO https://github.com/bobinx/wdpassport-auto-unlock/releases/latest/download/wd-auto-unlock_1.0.0_amd64.deb
+sudo apt install ./wd-auto-unlock_1.0.0_amd64.deb
+
+# For ARM64 / Raspberry Pi 4/5:
+curl -LO https://github.com/bobinx/wdpassport-auto-unlock/releases/latest/download/wd-auto-unlock_1.0.0_arm64.deb
+sudo apt install ./wd-auto-unlock_1.0.0_arm64.deb
+```
+
+#### Option B: Homebrew (`brew`)
+
+Install via Homebrew on Linux:
+
+```bash
+brew install --build-from-source Formula/wd-auto-unlock.rb
+```
+
+Or tap the repository directly:
+
+```bash
+brew tap bobinx/tap https://github.com/bobinx/wdpassport-auto-unlock
+brew install wd-auto-unlock
+```
+
+#### Option C: From Source
+
+Compile the static Go binary and install the systemd service and udev rules:
 
 ```bash
 git clone https://github.com/bobinx/wdpassport-auto-unlock.git
