@@ -1,5 +1,6 @@
 [Unit]
-Description=Run WD Unlock 30 seconds after boot
+Description=Trigger WD Passport auto-unlock 30 seconds after boot
+Documentation=https://github.com/bobinx/wdpassport-auto-unlock
 
 [Timer]
 OnBootSec=30

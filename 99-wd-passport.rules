@@ -1,2 +1,2 @@
-# Unlock WD Passport when connected
-ACTION=="add", SUBSYSTEM=="block", ATTRS{model}=="My Passport*", ATTRS{vendor}=="WD", TAG+="systemd", ENV{SYSTEMD_WANTS}="wd-unlock.service"
+# Automatically trigger WD Passport unlock service when drive is attached
+ACTION=="add", SUBSYSTEM=="block", ENV{DEVTYPE}=="disk", ATTRS{vendor}=="WD*|*Western Digital*", ATTRS{model}=="*Passport*", TAG+="systemd", ENV{SYSTEMD_WANTS}="wd-unlock.service"
