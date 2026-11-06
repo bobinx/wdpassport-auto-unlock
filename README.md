@@ -1,10 +1,10 @@
 # wd-auto-unlock
 
-Auto-unlock and mount Western Digital My Passport drives on Linux.
+Automatically unlock and mount Western Digital My Passport drives on Linux.
 
 ## Quickstart
 
-### Install
+### 1. Install
 
 ```bash
 git clone https://github.com/bobinx/wdpassport-auto-unlock.git
@@ -12,58 +12,122 @@ cd wdpassport-auto-unlock
 sudo make install
 ```
 
-### Configure
+### 2. Add your password
 
-Put your drive password and filesystem UUID into `/etc/wdpassport.conf`:
+Open the configuration file:
+```bash
+sudo nano /etc/wdpassport.conf
+```
 
+Set your unlock password:
 ```ini
 [wdpassport]
 password = your_drive_password
-uuid = 88E2-42DF
-mount_point = /media/WD
 ```
 
-Restrict permissions so only root can read the password:
+Restrict permissions so only root can read your password:
 ```bash
 sudo chmod 600 /etc/wdpassport.conf
 ```
 
-### Run
+### 3. Test and enable
 
-Unlock and mount manually:
+Plug in your drive and test unlocking:
 ```bash
 sudo wd-auto-unlock
 ```
 
-Or enable the timer and udev rule to unlock automatically when plugged in or on boot:
+Enable the service so it unlocks automatically on boot and whenever you plug the drive in:
 ```bash
 sudo systemctl enable --now wd-unlock.timer
 sudo udevadm control --reload-rules
 ```
 
-## Background
+That is it. Your drive will now unlock automatically whenever it is connected.
 
-Western Digital My Passport drives with hardware encryption lock themselves whenever they lose power. WD provides official unlock software for Windows and macOS, but not for Linux. When connected to a Linux machine, the drive presents a virtual CD-ROM and leaves the actual data partition locked and unreadable.
+---
 
-Tools like `wdpassport-utils` can send the vendor SCSI commands to unlock the drive, but they are interactive CLI utilities meant for typing a password into a terminal prompt. If the drive is attached to a home server, NAS, or desktop, you usually want it unlocked and mounted automatically on boot or when plugged in.
+## Automatic mounting (optional)
 
-This utility automates that workflow:
-1. A udev rule detects the drive when connected over USB.
-2. A systemd service runs `wd-auto-unlock` using the settings in `/etc/wdpassport.conf`.
-3. The script sends the unlock command over the Linux SCSI generic (`SG_IO`) interface.
-4. The kernel rescans the partition table, and the partition is mounted to your target directory.
+By default, `wd-auto-unlock` unlocks the drive and tells the Linux kernel to load its partition table. If you want this tool to mount the filesystem for you as well:
 
-It uses Python standard library modules (`ctypes`, `fcntl`, `hashlib`, `struct`) so there are no extra packages or compilers needed.
+1. Unlock the drive once with `sudo wd-auto-unlock`.
+2. Find your partition's filesystem UUID:
+   ```bash
+   lsblk -f
+   ```
+   Look for your drive (for example, `sdb1`) and copy its `UUID` string:
+   ```text
+   NAME   FSTYPE LABEL UUID                                 MOUNTPOINTS
+   sdb
+   └─sdb1 ext4   Data  88E2-42DF-ABCD                       
+   ```
 
-## Commands
+3. Add the `uuid` and your target `mount_point` to `/etc/wdpassport.conf`:
+   ```ini
+   [wdpassport]
+   password = your_drive_password
+   uuid = 88E2-42DF-ABCD
+   mount_point = /media/WD
+   ```
+
+Now whenever the drive is plugged in, the tool will unlock it, wait for the partition to appear, and mount it to `/media/WD`.
+
+---
+
+## Checking status and logs
+
+Check whether your drive is currently locked or unlocked:
+```bash
+sudo wd-auto-unlock status
+```
+
+Output:
+```text
+Device:          /dev/sdb
+Security Status: unlocked
+Encryption:      AES_256_XTS
+Key Length:      32 bytes
+```
+
+View system service logs:
+```bash
+sudo journalctl -u wd-unlock.service -e
+```
+
+Safely unmount:
+```bash
+sudo wd-auto-unlock unmount
+```
+
+---
+
+## How it works
+
+Western Digital My Passport drives have built-in hardware encryption. When they lose power or get unplugged, they lock themselves. Western Digital only provides unlock software for Windows and macOS. When plugged into Linux, the drive shows up as a virtual CD-ROM, and the real storage partition stays locked and invisible.
+
+This tool solves that:
+1. When you plug in the drive, a udev rule notices it and triggers `wd-unlock.service`.
+2. The script reads the password from `/etc/wdpassport.conf`.
+3. It sends the vendor SCSI unlock commands directly through the Linux kernel.
+4. The kernel re-reads the partition table, making your partitions accessible.
+5. If configured, it mounts the partition to your chosen folder.
+
+It uses Python's standard library modules (`ctypes`, `fcntl`, `hashlib`, `struct`). You do not need pip, third-party libraries, or a C compiler.
+
+---
+
+## Reference
+
+### Commands
 
 | Command | Description |
 | :--- | :--- |
-| `wd-auto-unlock unlock` | Unlock the drive, rescan partition table, and mount (default). |
+| `wd-auto-unlock unlock` | Unlock the drive, rescan partition table, and mount if configured (default). |
 | `wd-auto-unlock status` | Print current lock state, cipher, and key length. |
 | `wd-auto-unlock unmount` | Unmount the configured mount point. |
 
-## Options
+### Options
 
 | Option | Env variable | Description |
 | :--- | :--- | :--- |
@@ -73,48 +137,18 @@ It uses Python standard library modules (`ctypes`, `fcntl`, `hashlib`, `struct`)
 | `-m, --mount-point PATH` | `WD_MOUNT_POINT` | Directory mount target (e.g. `/media/WD`). |
 | `-c, --config PATH` | | Config file path (default: `/etc/wdpassport.conf`). |
 | `-t, --timeout SEC` | | Seconds to wait for partition device to appear (default: 30). |
-| `--json` | | Print output as JSON. |
+| `--json` | | Print output in JSON format for scripts. |
 | `-V, --version` | | Print version and exit. |
 | `-h, --help` | | Print help and exit. |
 
-## Configuration
+### Configuration priority
 
 Settings are resolved in order:
 1. Command line flags
 2. Environment variables
 3. Configuration file (`/etc/wdpassport.conf`)
 
-Example `/etc/wdpassport.conf`:
-
-```ini
-[wdpassport]
-password = secret
-uuid = 88E2-42DF
-mount_point = /media/WD
-timeout = 30
-# device = /dev/sdb   # Optional: omit to auto-detect
-```
-
-## How the automation works
-
-Installation sets up three system files:
-
-- `/etc/udev/rules.d/99-wd-passport.rules`: Tells systemd to start `wd-unlock.service` when a My Passport drive is connected.
-- `/etc/systemd/system/wd-unlock.service`: Runs `wd-auto-unlock unlock` as a oneshot task.
-- `/etc/systemd/system/wd-unlock.timer`: Runs `wd-unlock.service` 30 seconds after system boot to catch drives already plugged in at startup.
-
-View logs with journalctl:
-```bash
-sudo journalctl -u wd-unlock.service -f
-```
-
-## Testing
-
-Run the test suite:
-```bash
-make test
-make lint
-```
+---
 
 ## Uninstall
 
@@ -124,7 +158,12 @@ sudo systemctl daemon-reload
 sudo udevadm control --reload-rules
 ```
 
-The configuration file `/etc/wdpassport.conf` stays on disk. Remove it manually if you do not plan to use it again.
+The configuration file `/etc/wdpassport.conf` is preserved during uninstall. Delete it manually if you do not plan to use it again:
+```bash
+sudo rm -f /etc/wdpassport.conf
+```
+
+---
 
 ## Credits and references
 
