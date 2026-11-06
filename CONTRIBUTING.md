@@ -1,10 +1,10 @@
 # Contributing
 
-Contributions are welcome. Please keep changes aligned with the Unix philosophy: do one thing and do it well, maintain zero external dependencies, and avoid feature bloat.
+Keep changes focused. This tool does one thing well: it unlocks and mounts Western Digital My Passport drives on Linux without external dependencies.
 
 ## Development setup
 
-The tool uses only Python standard library modules. You need Python 3.9 or newer. No virtual environments or third-party packages are required.
+You need Python 3.10 or newer. Everything runs on standard library modules. You do not need virtual environments or third-party packages.
 
 Clone the repository:
 ```bash
@@ -19,14 +19,14 @@ Run the test suite:
 make test
 ```
 
-Run bytecode and syntax checks:
+Run syntax checks:
 ```bash
 make lint
 ```
 
 ## Guidelines
 
-* **Zero external dependencies**: Do not introduce pip dependencies or third-party runtime modules. All SCSI commands and sysfs interactions must use the standard library.
-* **Fast offline tests**: Any new feature or bug fix must include unit tests that run offline in milliseconds.
-* **Standard exit codes**: Return 0 for success, 1 for operational failures, and 2 for argument or configuration errors.
-* **Pull requests**: Create a topic branch, keep commits focused, and ensure `make test` and `make lint` pass before opening a pull request.
+- Keep dependencies at zero. Do not add pip packages or compiled C extensions. All SCSI calls and sysfs reads belong in Python's standard library.
+- Keep tests fast and offline. Every feature and bug fix needs tests that execute in milliseconds without real hardware or network calls.
+- Use standard Unix exit codes. Return 0 on success, 1 on runtime failures, and 2 on argument or configuration errors.
+- Open a topic branch for pull requests, keep commits focused, and confirm `make test` and `make lint` pass before submitting.

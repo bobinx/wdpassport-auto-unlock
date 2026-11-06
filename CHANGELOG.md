@@ -7,13 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.0.0] - 2026-11-07
 
 ### Added
-* Zero-dependency direct SCSI pass-through implementation using Linux `SG_IO` ioctl.
-* Automatic Western Digital My Passport drive discovery through Linux sysfs and disk identifiers.
-* Unified command line interface with `unlock`, `status`, and `unmount` commands.
-* Structured JSON output support via `--json` for scripting and monitoring.
-* Secure configuration file support (`/etc/wdpassport.conf`) with CLI and environment variable overrides.
-* Standardized Unix exit codes (0 for success, 1 for runtime failure, 2 for configuration or argument error).
-* Automated systemd oneshot service, boot timer, and udev hotplug rule.
-* Comprehensive offline test suite and POSIX-compliant Makefile for build, lint, install, and uninstall workflows.
+* Direct SCSI pass-through using Linux `SG_IO` ioctls in Python's standard library.
+* Automatic My Passport drive discovery through Linux sysfs and disk identifiers.
+* Unified CLI with `unlock`, `status`, and `unmount` commands.
+* Structured JSON output via `--json` for scripts and monitoring.
+* Configuration file support (`/etc/wdpassport.conf`) with CLI and environment variable overrides.
+* Standard Unix exit codes (0 for success, 1 for runtime failure, 2 for argument or syntax error).
+* Oneshot systemd service, boot timer, and udev hotplug rule for automated mounting.
+* Offline test suite and Makefile for installation, linting, and testing.
 
 [1.0.0]: https://github.com/bobinx/wdpassport-auto-unlock/releases/tag/v1.0.0

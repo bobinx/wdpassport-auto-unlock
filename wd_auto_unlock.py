@@ -214,7 +214,7 @@ class LinuxSgioTransport(ScsiTransport):
 # --- Core Cryptographic & SCSI Logic ---
 
 def compute_checksum(data: bytes) -> int:
-    """Computes the Western Digital Handy Store Block checksum."""
+    """Compute the Western Digital Handy Store Block checksum."""
     if len(data) < 510:
         raise ValueError("Data block must be at least 510 bytes")
     total = sum(data[:510]) + data[0]
@@ -222,7 +222,7 @@ def compute_checksum(data: bytes) -> int:
 
 
 def derive_password_key(password: str, iteration: int, salt: bytes) -> bytes:
-    """Derives the unlock key from passphrase, salt, and iteration count."""
+    """Derive the unlock key from passphrase, salt, and iteration count."""
     salt_padded = salt + b"\x00\x00"
     clean_chars = []
     for i in range(len(salt_padded) // 2):
@@ -241,7 +241,7 @@ def derive_password_key(password: str, iteration: int, salt: bytes) -> bytes:
 
 
 def get_encryption_status(transport: ScsiTransport) -> dict[str, Any]:
-    """Queries drive encryption and lock status."""
+    """Query drive encryption and lock status."""
     cdb = bytes([0xC0, 0x45, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x30, 0x00])
     data = transport.read(cdb, BLOCK_SIZE)
 
@@ -265,7 +265,7 @@ def get_encryption_status(transport: ScsiTransport) -> dict[str, Any]:
 
 
 def read_handy_store_block1(transport: ScsiTransport) -> Optional[tuple[int, bytes]]:
-    """Reads Handy Store Block 1 to obtain iterations and salt."""
+    """Read Handy Store Block 1 to obtain iterations and salt."""
     cdb = bytes([0xD8, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x01, 0x00])
     data = transport.read(cdb, BLOCK_SIZE)
     if len(data) != BLOCK_SIZE:
@@ -289,7 +289,7 @@ def read_handy_store_block1(transport: ScsiTransport) -> Optional[tuple[int, byt
 
 
 def unlock_drive(transport: ScsiTransport, password: str) -> dict[str, Any]:
-    """Unlocks a locked WD Passport drive with the given passphrase."""
+    """Unlock a locked WD Passport drive with the given passphrase."""
     status = get_encryption_status(transport)
     locked_code = status["locked_code"]
 
@@ -342,7 +342,7 @@ def unlock_drive(transport: ScsiTransport, password: str) -> dict[str, Any]:
 # --- Device Discovery & System Actions ---
 
 def find_passport_devices() -> list[dict[str, str]]:
-    """Discovers connected Western Digital My Passport block devices via sysfs."""
+    """Discover connected Western Digital My Passport block devices in sysfs."""
     devices: list[dict[str, str]] = []
     sys_block = "/sys/block"
     if not os.path.isdir(sys_block):
@@ -410,7 +410,7 @@ def find_passport_devices() -> list[dict[str, str]]:
 
 
 def rescan_kernel_device(device_node: str, timeout: int = 15) -> None:
-    """Notifies the Linux kernel to rescan the block device and partition table."""
+    """Tell the Linux kernel to rescan the block device and partition table."""
     dev_name = os.path.basename(device_node)
     rescan_path = f"/sys/block/{dev_name}/device/rescan"
     if os.path.isfile(rescan_path):
@@ -440,7 +440,7 @@ def rescan_kernel_device(device_node: str, timeout: int = 15) -> None:
 
 
 def wait_for_uuid(uuid: str, timeout: int = 30) -> Optional[str]:
-    """Polls until the block device for the specified UUID appears."""
+    """Wait until the block device for the specified UUID appears."""
     uuid_path = f"/dev/disk/by-uuid/{uuid}"
     deadline = time.time() + max(0, timeout)
     while True:
@@ -456,7 +456,7 @@ def wait_for_uuid(uuid: str, timeout: int = 30) -> Optional[str]:
 
 
 def mount_device(target: str, mount_point: str, timeout: int = 15) -> bool:
-    """Mounts a device or UUID partition to the specified mount point."""
+    """Mount a device or UUID partition to the specified mount point."""
     if os.path.ismount(mount_point):
         return True
 
@@ -484,7 +484,7 @@ def mount_device(target: str, mount_point: str, timeout: int = 15) -> bool:
 
 
 def unmount_path(mount_point: str, timeout: int = 15) -> bool:
-    """Unmounts the specified mount point. Returns True if unmounted, False if already unmounted."""
+    """Unmount the specified mount point. Return True if unmounted, False if already unmounted."""
     if not os.path.ismount(mount_point):
         return False
 
@@ -509,7 +509,7 @@ def unmount_path(mount_point: str, timeout: int = 15) -> bool:
 # --- Configuration & CLI ---
 
 def load_config(config_path: str = DEFAULT_CONFIG_PATH) -> dict[str, str]:
-    """Loads configuration from INI file if present."""
+    """Load configuration from INI file if present."""
     config: dict[str, str] = {}
     if not os.path.isfile(config_path):
         if config_path != DEFAULT_CONFIG_PATH:
@@ -549,7 +549,7 @@ def load_config(config_path: str = DEFAULT_CONFIG_PATH) -> dict[str, str]:
 
 
 def resolve_device(cli_device: Optional[str], config_device: Optional[str]) -> str:
-    """Resolves target device path via CLI flag, config file, or auto-discovery."""
+    """Resolve target device path from CLI arguments, config file, or sysfs."""
     if cli_device:
         return cli_device
     if config_device:
