@@ -1,122 +1,137 @@
-# WD Passport Auto Unlock & Mount
+```
+ __      __ ___    ___                                   _   
+ \ \    / /|   \  | _ \__ _ ___ ___ _ __  ___  _ _ _| |_ 
+  \ \/\/ / | |) | |  _/ _` (_-</ -_) '_ \/ _ \| '_|_   _|
+   \_/\_/  |___/  |_| \__,_/__/\___| .__/\___/|_|   |_|  
+                                   |_|                   
+```
 
-Scripts to automatically unlock and mount a WD Passport HDD on Linux.
-Included
-- A script that uses [wdpassport-utils](https://github.com/bobinx/wdpassport-utils) to unlock drive using a *hardcoded password and device uid*
-- A systemd service that executes the script
-- A systemd timer that triggers 30s after boot to auto unlock connected device (optional)
-- Udev rules to auto run the service when a specific device is connected (Update the udev rule to match your device)
+Zero-dependency auto-unlock and mount tool for Western Digital My Passport drives on Linux.
 
-## Credits
-- Uses https://github.com/bobinx/wdpassport-utils, forked from https://github.com/0-duke/wdpassport-utils
+## Get started
 
-## Prerequisites
+### Installation
 
-1.  **Clone this repository**:
-    ```bash
-    git clone --recursive <URL_TO_THIS_REPO>
-    cd wdpassport-autounlock-linux
-    ```
-    *If you already cloned it without `--recursive`, run:*
-    ```bash
-    git submodule update --init
-    ```
+Clone and install using the included Makefile:
 
-2.  **Dependencies**: Install Python pip and sg3-utils.
-    ```bash
-    sudo apt-get update
-    sudo apt-get install -y python3-pip sg3-utils
-    ```
+```bash
+git clone https://github.com/bobinx/wdpassport-auto-unlock.git
+cd wdpassport-auto-unlock
+sudo make install
+```
+
+### 30-second quickstart
+
+1. Edit `/etc/wdpassport.conf` with your drive password and filesystem UUID:
+   ```ini
+   [wdpassport]
+   password = your_drive_password
+   uuid = 88E2-42DF
+   mount_point = /media/WD
+   ```
+
+2. Lock down config file permissions:
+   ```bash
+   sudo chmod 600 /etc/wdpassport.conf
+   ```
+
+3. Run the unlock command:
+   ```bash
+   sudo wd-auto-unlock
+   ```
+
+Enable automatic unlocking on drive plug-in or system boot:
+```bash
+sudo systemctl enable --now wd-unlock.timer
+sudo udevadm control --reload-rules
+```
+
+## Why I built this
+
+I run a headless Linux server for backups and storage. I had a hardware-encrypted Western Digital My Passport drive that worked fine on Windows, but plugging it into Linux was a headache. Western Digital does not provide an official Linux unlock utility. Instead, the Linux kernel sees a dummy virtual CD-ROM and leaves the actual storage volume locked and inaccessible.
+
+The few scripts floating around online were brittle. Most required installing Python development headers and compiling third-party C libraries from random GitHub forks with root pip privileges. None of them handled automatic hotplugging cleanly, and they asked for passwords interactively on standard input, which broke automated reboots.
+
+I wanted a single-purpose utility that adheres to the Unix philosophy. It uses standard Linux kernel SCSI pass-through interfaces directly from Python standard library modules. You do not need a compiler, you do not need pip, and you do not need external libraries. It discovers the drive, negotiates the hardware unlock in under 100 milliseconds, prompts the kernel to rescan partition tables, and mounts the filesystem where you want it.
+
+## Commands and options
+
+### Commands
+
+| Command | Action |
+| :--- | :--- |
+| `wd-auto-unlock unlock` | Unlocks the drive, rescans partition tables, and mounts if configured (default action). |
+| `wd-auto-unlock status` | Queries and displays current drive lock state, cipher, and key length. |
+| `wd-auto-unlock unmount` | Safely unmounts the configured partition mount point. |
+
+### Options
+
+| Option | Environment variable | Description |
+| :--- | :--- | :--- |
+| `-d, --device PATH` | `WD_DEVICE` | Block device path (for example, `/dev/sdb`). Auto-detected if omitted. |
+| `-p, --password PASS` | `WD_PASSWORD` | Unlock passphrase. Prefer storing in `/etc/wdpassport.conf` for security. |
+| `-u, --uuid UUID` | `WD_UUID` | Filesystem UUID to wait for and mount. |
+| `-m, --mount-point PATH` | `WD_MOUNT_POINT` | Directory mount target (for example, `/media/WD`). |
+| `-c, --config PATH` | | Path to configuration file (default: `/etc/wdpassport.conf`). |
+| `-t, --timeout SEC` | | Seconds to wait for partition device to appear (default: 30). |
+| `--json` | | Output responses in structured JSON format for scripts. |
+| `-V, --version` | | Show version number and exit. |
+| `-h, --help` | | Show help message and exit. |
 
 ## Configuration
 
-Open `wd_auto_unlock.py` in a text editor and check the top configuration section:
+Configuration values are resolved using this priority order:
+1. Command line flags
+2. Environment variables
+3. Configuration file (`/etc/wdpassport.conf`)
 
-```python
-# --- CONFIGURATION ---
-PASSWORD = "password"         # <--- Change to your actual HDD password
-DRIVE_UUID = "88E2-42DF"      # <--- UUID of your partition (run `sudo blkid`). Used to identify the drive after unlock.
-MOUNT_POINT = "/media/WD"     # <--- Desired mount point
+Example `/etc/wdpassport.conf`:
+
+```ini
+[wdpassport]
+password = secret
+uuid = 88E2-42DF
+mount_point = /media/WD
+timeout = 30
+# device = /dev/sdb   # Optional: omit to auto-detect
 ```
 
-## Installation
+## System automation
 
-Run the following commands to install the script and services:
+The installer places systemd units and udev rules into standard system paths:
 
-1.  **Install Files**
-    Create a directory in `/usr/local/bin` and copy the files there:
-    ```bash
-    sudo mkdir -p /usr/local/bin/wd-auto-unlock
-    sudo cp wd_auto_unlock.py /usr/local/bin/wd-auto-unlock/
-    
-    # Copy the required utility scripts from the submodule
-    sudo cp -R wdpassport-utils /usr/local/bin/wd-auto-unlock/
-    
-    # Make executable
-    sudo chmod +x /usr/local/bin/wd-auto-unlock/wd_auto_unlock.py
-    ```
+* **Udev rule (`/etc/udev/rules.d/99-wd-passport.rules`)**: Fires whenever a Western Digital My Passport drive is connected over USB, triggering `wd-unlock.service`.
+* **Systemd service (`/etc/systemd/system/wd-unlock.service`)**: Runs `wd-auto-unlock unlock` once as a oneshot system task.
+* **Systemd timer (`/etc/systemd/system/wd-unlock.timer`)**: Triggers 30 seconds after system boot to catch drives that were already attached while the machine powered up.
 
-2.  **Install Systemd Service & Timer**
-    *   **Service**: Defines *how* the unlock runs. (Required)
-    *   **Timer**: Delays execution by 30s on boot. (Optional: Use if you want to ensure the system is fully settled before mounting on boot).
-    ```bash
-    sudo cp wd-unlock.service /etc/systemd/system/
-    # Optional: Install timer if you want a boot-time delay
-    sudo cp wd-unlock.timer /etc/systemd/system/
-    ```
-
-3.  **Install Udev Rule (for hot-plugging)**
-    ```bash
-    sudo cp 99-wd-passport.rules /etc/udev/rules.d/
-    ```
-
-4.  **Activate**
-    ```bash
-    sudo systemctl daemon-reload
-    sudo udevadm control --reload-rules
-    
-    sudo systemctl enable --now wd-unlock.timer
-
-
-## Troubleshooting
-
-**1. Service didn't start?**
-Check the logs:
+Check service status or logs with journalctl:
 ```bash
-sudo journalctl -u wd-unlock.service
+sudo journalctl -u wd-unlock.service -f
 ```
 
-**2. Udev rule not triggering?**
-Monitor udev events in real-time found by the kernel:
+## Verification and testing
+
+Run the offline test suite and syntax checks:
+
 ```bash
-sudo udevadm monitor --environment --udev
+make test
+make lint
 ```
-Then plug in the drive. You should see events. If you don't see `TAGS=:systemd:` or `Use of: wd-unlock.service` in the output, verify:
-*   The `model` and `vendor` in `99-wd-passport.rules` match your drive (check with `udevadm info -a /dev/sdb`).
-*   You reloaded rules: `sudo udevadm control --reload-rules`.
 
+All tests run locally in milliseconds with no external network or hardware dependencies.
 
-## Uninstall
+## Uninstallation
 
-To remove the automation:
+To remove all installed binaries, systemd units, and udev rules:
 
-1.  **Stop and Disable Services**
-    ```bash
-    sudo systemctl stop wd-unlock.service wd-unlock.timer
-    sudo systemctl disable wd-unlock.service wd-unlock.timer
-    ```
+```bash
+sudo make uninstall
+sudo systemctl daemon-reload
+sudo udevadm control --reload-rules
+```
 
-2.  **Remove Files**
-    ```bash
-    sudo rm /etc/systemd/system/wd-unlock.service
-    sudo rm /etc/systemd/system/wd-unlock.timer
-    sudo rm /etc/udev/rules.d/99-wd-passport.rules
-    sudo rm -rf /usr/local/bin/wd-auto-unlock
-    ```
+The configuration file `/etc/wdpassport.conf` is preserved during uninstallation. Remove it manually if no longer needed.
 
-3.  **Reload Daemons**
-    ```bash
-    sudo systemctl daemon-reload
-    sudo udevadm control --reload-rules
-    ```
-    
+## License
+
+MIT License. See [LICENSE](LICENSE) for details.

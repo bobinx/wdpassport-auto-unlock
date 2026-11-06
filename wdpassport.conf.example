@@ -1,0 +1,22 @@
+# /etc/wdpassport.conf
+# Configuration for wd-auto-unlock
+# Set file permissions to 0600 (chmod 600 /etc/wdpassport.conf)
+
+[wdpassport]
+# Western Digital drive unlock password (required)
+password = your_secure_password_here
+
+# Filesystem UUID of the partition to mount (run `lsblk -f` or `blkid`)
+# Optional: omit if mounting is handled elsewhere (e.g., /etc/fstab)
+uuid = 88E2-42DF
+
+# Target directory to mount the unlocked partition
+# Optional: required only if uuid is specified
+mount_point = /media/WD
+
+# Seconds to wait for the partition device to settle after unlock (default: 30)
+timeout = 30
+
+# Explicit block device path (e.g., /dev/sdb)
+# Optional: omit to auto-detect connected WD Passport drives
+# device = /dev/sdb

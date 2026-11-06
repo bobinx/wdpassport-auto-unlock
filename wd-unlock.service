@@ -1,12 +1,12 @@
 [Unit]
-Description=WD Passport Auto Unlock
+Description=Western Digital My Passport Auto Unlock and Mount
+Documentation=https://github.com/bobinx/wdpassport-auto-unlock
 After=local-fs.target
-# We want this service to be able to be started by udev activation or timer
 
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/python3 /usr/local/bin/wd-auto-unlock/wd_auto_unlock.py
-RemainAfterExit=yes
+ExecStart=/usr/local/bin/wd-auto-unlock unlock
+RemainAfterExit=no
 StandardOutput=journal
 StandardError=journal
 
