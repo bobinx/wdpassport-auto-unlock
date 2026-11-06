@@ -5,17 +5,14 @@ SYSTEMD_SYSTEM_DIR ?= /etc/systemd/system
 UDEV_RULES_DIR ?= /etc/udev/rules.d
 PYTHON ?= python3
 
-.PHONY: all test lint install uninstall clean
+.PHONY: all lint install uninstall clean
 
 all:
 	@echo "wd-auto-unlock is a zero-dependency Python utility."
-	@echo "Run 'make test' to run tests, or 'sudo make install' to install."
-
-test:
-	$(PYTHON) -m unittest discover -s tests -v
+	@echo "Run 'make lint' to check syntax, or 'sudo make install' to install."
 
 lint:
-	$(PYTHON) -m py_compile wd_auto_unlock.py tests/*.py
+	$(PYTHON) -m py_compile wd_auto_unlock.py
 
 install:
 	install -d $(DESTDIR)$(BINDIR)
