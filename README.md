@@ -126,6 +126,13 @@ sudo udevadm control --reload-rules
 
 The configuration file `/etc/wdpassport.conf` stays on disk. Remove it manually if you do not plan to use it again.
 
+## Credits and references
+
+The SCSI unlock sequence, Handy Store checksum algorithm, and password key derivation are based on the reverse engineering work and implementations in:
+
+- [wdpassport-utils](https://github.com/0-duke/wdpassport-utils) by 0-duke, DanLukes, KenMacD, crypto-universe, and JoshData.
+- [bobinx/wdpassport-utils](https://github.com/bobinx/wdpassport-utils).
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

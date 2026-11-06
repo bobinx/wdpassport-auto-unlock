@@ -3,6 +3,9 @@
 
 Single-purpose, zero-dependency Linux utility to unlock and mount
 Western Digital My Passport hardware-encrypted drives.
+
+SCSI commands, checksums, and key derivation are based on wdpassport-utils
+by 0-duke, DanLukes, KenMacD, crypto-universe, JoshData, and bobinx.
 """
 
 from __future__ import annotations
